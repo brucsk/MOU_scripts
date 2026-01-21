@@ -1,1 +1,15 @@
-/.venv
+# Ignore everything
+*
+
+# Re-include directories 
+!*/
+
+# Explicitly ignore virtual environments
+.venv/
+
+# Do not ignore these specific files
+!.gitignore
+!requirements.txt
+!SC_EnigmadK68.mat
+!test_MOU_largenet.py
+!test_notebook.ipynb

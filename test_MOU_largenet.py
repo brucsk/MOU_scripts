@@ -169,7 +169,7 @@ class MOUv2:
 
         # Decide number of time shifts for covariances Q_emp
         if 'i_tau_opt' in kwargs.keys():
-            if (not type(kwargs['i_tau_opt']) == np.int):
+            if (not type(kwargs['i_tau_opt']) == int):
                 raise TypeError("""Argument Xi_tau_opt must be integer.""")
             # calculate time lags from 0 up to i_tau_opt
             n_tau = int(kwargs['i_tau_opt']) + 1
@@ -677,36 +677,36 @@ class MOUv2:
 # In[2]:
 #
 #
-N = 20 # number of nodes
-d = 0.3 # density of connectivity
+# N = 20 # number of nodes
+# d = 0.3 # density of connectivity
 ## generate random matrix
-C_orig = tools.make_rnd_connectivity(N, density=d, w_min=0.5/N/d, w_max=1.2/N/d)
+# C_orig = tools.make_rnd_connectivity(N, density=d, w_min=0.5/N/d, w_max=1.2/N/d)
 #
 ## create MOU process
-mou_orig = MOU(C_orig)
+# mou_orig = MOU(C_orig)
 #
-use_topology = True
+# use_topology = True
 #
-T = 1000 # time in seconds
+# T = 1000 # time in seconds
 ## simulate
-ts_sim = mou_orig.simulate(T)
+# ts_sim = mou_orig.simulate(T)
 #
 ## plots
-pp.figure()
-pp.plot(range(T),ts_sim)
-pp.xlabel('time')
-pp.ylabel('activity')
-pp.title('simulated MOU signals')
-#
-D = np.linalg.eigvals(C_orig)
-pp.figure()
-pp.scatter(np.real(D),np.imag(D))
-pp.plot([1,1],[-1,1],'--k')
-pp.xlabel('real part of eigenvalue')
-pp.ylabel('imag part of eigenvalue')
-pp.title('spectrum of original C')
+# pp.figure()
+# pp.plot(range(T),ts_sim)
+# pp.xlabel('time')
+# pp.ylabel('activity')
+# pp.title('simulated MOU signals')
+# #
+# D = np.linalg.eigvals(C_orig)
+# pp.figure()
+# pp.scatter(np.real(D),np.imag(D))
+# pp.plot([1,1],[-1,1],'--k')
+# pp.xlabel('real part of eigenvalue')
+# pp.ylabel('imag part of eigenvalue')
+# pp.title('spectrum of original C')
 
-pp.show()
+# pp.show()
 
 #
 ## In[ ]:
@@ -921,4 +921,168 @@ pp.show()
 #print('asym C lyap 2020:', asym(C_est_2020))
 #print('asym C lyap 2016:', asym(C_est_2016))
 #print('asym C mom:', asym(C_est_mom))
-#
+
+
+#%% Load .mat data and fit MOU model
+
+# Load the .mat file
+import scipy.io as sio
+mat_data = sio.loadmat('SC_EnigmadK68.mat')
+
+# Extract the data tensor (adjust key name based on actual structure)
+# Common keys in .mat files: try to find the data
+data_keys = [k for k in mat_data.keys() if not k.startswith('__')]
+print(f"Available keys in .mat file: {data_keys}")
+
+# Assuming the main data is in one of the non-private keys
+# You may need to adjust this based on the actual key name
+if len(data_keys) == 1:
+    X_data = mat_data[data_keys[0]]
+else:
+    # Try common names or take the first non-metadata key
+    possible_names = ['data', 'X', 'timeseries', 'ts', 'SC']
+    X_data = None
+    for name in possible_names:
+        if name in mat_data:
+            X_data = mat_data[name]
+            break
+    if X_data is None:
+        X_data = mat_data[data_keys[0]]
+
+print(f"Data shape: {X_data.shape}")
+
+print(mat_data)
+# Ensure data is in the correct shape (t x n_nodes)
+if X_data.shape[0] < X_data.shape[1]:
+    print("Transposing data to ensure shape is (t x n_nodes)")
+    X_data = X_data.T
+
+n_timepoints, n_nodes = X_data.shape
+print(f"Time points: {n_timepoints}, Nodes: {n_nodes}")
+
+# Initialize and fit MOU model
+mou_fitted = MOUv2()
+mou_fitted.fit(X_data, method='lyapunov', i_tau_opt=1)
+
+print(f"\nModel fit correlation: {mou_fitted.score():.4f}")
+print(f"Model fit distance: {mou_fitted.d_fit['distance']:.4f}")
+print(f"Number of iterations: {mou_fitted.d_fit['iterations']}")
+
+# Get the fitted parameters
+J_fitted = mou_fitted.J
+Sigma_fitted = mou_fitted.Sigma
+
+print(f"\nFitted Jacobian eigenvalues (max real part): {np.real(np.linalg.eigvals(J_fitted)).max():.4f}")
+
+
+#%% Compute entropy of the fitted MOU process
+
+def compute_mou_entropy(Sigma, Q0=None, J=None):
+    """
+    Compute the differential entropy of a multivariate Ornstein-Uhlenbeck process.
+    
+    For a multivariate Gaussian with covariance Q0, the differential entropy is:
+    H = 0.5 * n * (1 + log(2*pi)) + 0.5 * log(det(Q0))
+    
+    Parameters
+    ----------
+    Sigma : ndarray
+        Noise covariance matrix
+    Q0 : ndarray, optional
+        Steady-state covariance matrix. If not provided, will be computed from J and Sigma.
+    J : ndarray, optional
+        Jacobian matrix (required if Q0 is not provided)
+    
+    Returns
+    -------
+    entropy : float
+        Differential entropy in nats
+    """
+    
+    if Q0 is None:
+        if J is None:
+            raise ValueError("Either Q0 or J must be provided")
+        # Compute steady-state covariance from Lyapunov equation
+        Q0 = spl.solve_continuous_lyapunov(J.T, -Sigma)
+    
+    n = Q0.shape[0]
+    
+    # Compute determinant
+    sign, logdet = np.linalg.slogdet(Q0)
+    
+    if sign <= 0:
+        print("Warning: Covariance matrix is not positive definite!")
+        return np.nan
+    
+    # Differential entropy: H = 0.5 * n * (1 + log(2*pi)) + 0.5 * log(det(Q0))
+    entropy = 0.5 * n * (1 + np.log(2 * np.pi)) + 0.5 * logdet
+    
+    return entropy
+
+
+# Compute steady-state covariance
+Q0_fitted = spl.solve_continuous_lyapunov(J_fitted.T, -Sigma_fitted)
+
+# Compute entropy
+entropy_fitted = compute_mou_entropy(Sigma_fitted, Q0=Q0_fitted)
+print(f"\nDifferential entropy of fitted MOU process: {entropy_fitted:.4f} nats")
+print(f"Differential entropy in bits: {entropy_fitted / np.log(2):.4f} bits")
+
+# Additional entropy measures
+# Entropy rate (for time-continuous process)
+entropy_rate = 0.5 * np.log(np.linalg.det(2 * np.pi * np.e * Sigma_fitted))
+print(f"Entropy rate: {entropy_rate:.4f} nats/time")
+print(f"Entropy rate: {entropy_rate / np.log(2):.4f} bits/time")
+
+
+#%% Visualization of fitted model
+
+pp.figure(figsize=(15, 5))
+
+pp.subplot(131)
+pp.imshow(J_fitted, cmap='RdBu_r', aspect='auto')
+pp.colorbar(label='Weight')
+pp.title('Fitted Jacobian Matrix')
+pp.xlabel('Source node')
+pp.ylabel('Target node')
+
+pp.subplot(132)
+pp.imshow(Sigma_fitted, cmap='viridis', aspect='auto')
+pp.colorbar(label='Noise covariance')
+pp.title('Fitted Noise Covariance')
+pp.xlabel('Node')
+pp.ylabel('Node')
+
+pp.subplot(133)
+pp.imshow(Q0_fitted, cmap='viridis', aspect='auto')
+pp.colorbar(label='Covariance')
+pp.title('Steady-state Covariance')
+pp.xlabel('Node')
+pp.ylabel('Node')
+
+pp.tight_layout()
+pp.show()
+
+# Plot convergence history if available
+if 'correlation history' in mou_fitted.d_fit:
+    pp.figure(figsize=(12, 4))
+    
+    pp.subplot(121)
+    pp.plot(mou_fitted.d_fit['distance history'][:mou_fitted.d_fit['iterations']])
+    pp.xlabel('Iteration')
+    pp.ylabel('Distance')
+    pp.title('Model Error During Optimization')
+    pp.grid(True)
+    
+    pp.subplot(122)
+    pp.plot(mou_fitted.d_fit['correlation history'][:mou_fitted.d_fit['iterations']])
+    pp.xlabel('Iteration')
+    pp.ylabel('Pearson correlation')
+    pp.title('Model Fit During Optimization')
+    pp.grid(True)
+    
+    pp.tight_layout()
+    pp.show()
+
+
+# %%
