@@ -12,4 +12,7 @@
 !requirements.txt
 !SC_EnigmadK68.mat
 !test_MOU_largenet.py
+!CalcEntropyMOU-SCZ.ipynb
+!TS_Control.npy
+!TS_Schizo.npy
 !test_notebook.ipynb
