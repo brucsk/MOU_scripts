@@ -198,6 +198,57 @@ class MOUv2:
         elif method == 'moments':
             return self.fit_moments(Q_emp[0,:,:], Q_emp[1,:,:])
 
+    def fit_Q(self, Q_emp, y=None, method='lyapunov', **kwargs):
+        """
+        New function to replace fit, to use Q0 and Q1 directly as the input
+        instead of calculating them from the time series.
+
+        Parameters
+        ----------
+        Q_emp : ndarray
+            The empirical covariance matrices to fit, of shape: n_tau x n_nodes x n_nodes.
+        y : (for compatibility, not used here).
+        method : string (optional)
+            Set the optimization method; should be 'lyapunov' or 'moments'.
+
+        Returns
+        -------
+        J : ndarray of rank 2
+            The estimated Jacobian. Shape [n_nodes, n_nodes]
+        Sigma : ndarray of rank 2
+            Estimated input noise covariance. Shape [n_nodes, n_nodes]
+        d_fit : dictionary
+            A dictionary with diagnostics of the fit. Keys are: ['iterations',
+            'distance', 'correlation'].
+        """
+        
+        if (not type(Q_emp) == np.ndarray) or (not Q_emp.ndim == 3):
+            raise TypeError("""Argument Q_emp must be a 3D array (n_tau x n_nodes x n_nodes).""")
+        n_tau, self.n_nodes = Q_emp.shape[0], Q_emp.shape[1]
+
+        # Make sure a correct optimization method was entered
+        if method not in ['lyapunov', 'moments']:
+            raise ValueError("""Please enter a valid method: 'lyapunov' or 'moments'.""")
+
+        # Decide number of time shifts for covariances Q_emp
+        if 'i_tau_opt' in kwargs.keys():
+            if (not type(kwargs['i_tau_opt']) == int):
+                raise TypeError("""Argument Xi_tau_opt must be integer.""")
+            # calculate time lags from 0 up to i_tau_opt
+            n_tau = int(kwargs['i_tau_opt']) + 1
+        else:
+            n_tau = 2
+            
+        # Create a dictionary to store the diagnostics of fit
+        self.d_fit = dict()
+        self.d_fit['n_tau'] = n_tau
+
+        # Call adequate method for optimization and check for specific arguments
+        if method == 'lyapunov':
+            return self.fit_LO(Q_emp, **kwargs)
+        elif method == 'moments':
+            return self.fit_moments(Q_emp[0,:,:], Q_emp[1,:,:])
+
         
     def fit_LO(self, Q_obj, i_tau_opt=1, mask_C=None, mask_Sigma=None, 
             epsilon_C=0.0001, epsilon_Sigma=0.01, regul_C=0.0, regul_Sigma=0.0, 
