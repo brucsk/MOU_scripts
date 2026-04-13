@@ -253,7 +253,8 @@ class MOUv2:
     def fit_LO(self, Q_obj, i_tau_opt=1, mask_C=None, mask_Sigma=None, 
             epsilon_C=0.0001, epsilon_Sigma=0.01, regul_C=0.0, regul_Sigma=0.0, 
             min_val_C=0.0, max_val_C=1.0, min_val_Sigma_diag=0.0, max_iter=10000, 
-            min_iter=10, algo_version='NeNe2020', verbose=False, **kwargs):
+            min_iter=10, algo_version='NeNe2020', track_eigs=False, eigs_every=1,
+            eigs_store_full=False, verbose=False, **kwargs):
         """
         Estimation of MOU parameters (connectivity C, noise covariance Sigma,
         and time constant tau_x) with Lyapunov optimization as in: Gilson et al.
@@ -384,6 +385,15 @@ class MOUv2:
         # Pearson correlation between model and objective FC matrices
         Pearson_Q_hist = np.zeros([max_iter], dtype=float)
 
+        # Store eigenvalues if tracking is enabled
+        if track_eigs:
+            eig_iter = []
+            eig_max_real = []
+            eig_min_real = []
+
+            if eigs_store_full:
+                eigs_history = []
+
         # identity matrix
         id_mat = np.eye(self.n_nodes, dtype=float)
 
@@ -394,6 +404,16 @@ class MOUv2:
 
             # calculate Jacobian of dynamical system
             J_opt = -id_mat / tau_x + C
+
+            # compute eigenvalues of Jacobian 
+            eigvals_J_opt = np.linalg.eigvals(J_opt)
+            # store eigenvalues if tracking is enabled
+            if track_eigs and np.mod(i_iter, eigs_every) == 0:
+                eig_iter.append(i_iter)
+                eig_max_real.append(np.max(eigvals_J_opt.real))
+                eig_min_real.append(np.min(eigvals_J_opt.real))
+                if eigs_store_full:
+                    eigs_history.append(eigvals_J_opt)
 
             # Calculate Q0 and Qtau for model
             Q0 = spl.solve_continuous_lyapunov(J_opt.T, -Sigma)
@@ -441,6 +461,7 @@ class MOUv2:
             # display optimization evolution if verbose==True
             if verbose: # and np.mod(i_iter, 10)==0:
                 print('optimisation step:', i_iter, '; model error =', dist_Q_hist[i_iter])
+                #print('max real part of eigenvalues:', np.max(eigvals_J_opt.real), '; min real part of eigenvalues:', np.min(eigvals_J_opt.real))
             # Check if max allowed number of iterations have been reached
             if i_iter >= max_iter-1:
                 stop_opt = True
@@ -455,6 +476,13 @@ class MOUv2:
                 # test
                 self.d_fit['distFC0'] = dist_Q0
                 self.d_fit['distFC1'] = dist_Qtau
+                # add eigenvalues diagnostics if tracking is enabled
+                if track_eigs:
+                    self.d_fit['eig_iter'] = eig_iter
+                    self.d_fit['eig_max_real'] = eig_max_real
+                    self.d_fit['eig_min_real'] = eig_min_real
+                    if eigs_store_full:
+                        self.d_fit['eigs_history'] = eigs_history
             else:
                 i_iter += 1
 
