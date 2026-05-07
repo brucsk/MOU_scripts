@@ -254,7 +254,7 @@ class MOUv2:
             epsilon_C=0.0001, epsilon_Sigma=0.01, regul_C=0.0, regul_Sigma=0.0, 
             min_val_C=0.0, max_val_C=1.0, min_val_Sigma_diag=0.0, max_iter=10000, 
             min_iter=10, algo_version='NeNe2020', track_eigs=False, eigs_every=1,
-            eigs_store_full=False, verbose=False, **kwargs):
+            eigs_store_full=False, track_cons_Q0_Q1 = True, verbose=False, **kwargs):
         """
         Estimation of MOU parameters (connectivity C, noise covariance Sigma,
         and time constant tau_x) with Lyapunov optimization as in: Gilson et al.
@@ -303,6 +303,14 @@ class MOUv2:
             optimization (increase of model error).
         algo_version : string (optional)
             Version of algorithm for the optimization of the network weights.
+        track_eigs : boolean (optional)
+            Whether to track the eigenvalues of the Jacobian during optimization.
+        eigs_every : integer (optional)
+            If track_eigs is True, the frequency (in number of iterations) to track the eigenvalues.
+        eigs_store_full : boolean (optional)
+            If track_eigs is True, whether to store the full eigenvalues at each tracking step (can consume a lot of memory).
+        track_cons_Q0_Q1 : boolean (optional)
+            Whether to track the consistency of Q0 and Q1 during optimization, that is, for J, we have Q1 ~ Q0 * expm(J).
 
         Returns
         -------
@@ -394,6 +402,9 @@ class MOUv2:
             if eigs_store_full:
                 eigs_history = []
 
+        if track_cons_Q0_Q1:
+            cons_Q0_Q1_hist = []
+
         # identity matrix
         id_mat = np.eye(self.n_nodes, dtype=float)
 
@@ -414,6 +425,13 @@ class MOUv2:
                 eig_min_real.append(np.min(eigvals_J_opt.real))
                 if eigs_store_full:
                     eigs_history.append(eigvals_J_opt)
+
+            # Track consistency between data-given Q0 and Q1 for the current J (matrix distance) 
+            if track_cons_Q0_Q1:
+                # Calculate consistency between Q0 and Q1 for the current J (matrix distance)
+                cons_Q0_Q1_hist.append(np.linalg.norm(Qtau_obj - np.dot(Q0_obj, spl.expm(J_opt * i_tau_opt))) / np.linalg.norm(Qtau_obj))
+                if verbose:
+                    print("Consistency between Q0 and Q1 for current J (Q1 - Q0*exp(J)/Q1):", cons_Q0_Q1_hist[-1])
 
             # Calculate Q0 and Qtau for model
             Q0 = spl.solve_continuous_lyapunov(J_opt.T, -Sigma)
@@ -483,6 +501,8 @@ class MOUv2:
                     self.d_fit['eig_min_real'] = eig_min_real
                     if eigs_store_full:
                         self.d_fit['eigs_history'] = eigs_history
+                if track_cons_Q0_Q1:
+                    self.d_fit['cons_Q0_Q1_history'] = cons_Q0_Q1_hist
             else:
                 i_iter += 1
 
