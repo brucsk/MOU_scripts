@@ -254,7 +254,7 @@ class MOUv2:
             epsilon_C=0.0001, epsilon_Sigma=0.01, regul_C=0.0, regul_Sigma=0.0, 
             min_val_C=0.0, max_val_C=1.0, min_val_Sigma_diag=0.0, max_iter=10000, 
             min_iter=10, algo_version='NeNe2020', track_eigs=False, eigs_every=1,
-            eigs_store_full=False, track_cons_Q0_Q1 = True, verbose=False, **kwargs):
+            eigs_store_full=False, track_cons_Q0_Q1 = True, track_J = True, verbose=False, **kwargs):
         """
         Estimation of MOU parameters (connectivity C, noise covariance Sigma,
         and time constant tau_x) with Lyapunov optimization as in: Gilson et al.
@@ -311,6 +311,8 @@ class MOUv2:
             If track_eigs is True, whether to store the full eigenvalues at each tracking step (can consume a lot of memory).
         track_cons_Q0_Q1 : boolean (optional)
             Whether to track the consistency of Q0 and Q1 during optimization, that is, for J, we have Q1 ~ Q0 * expm(J).
+        track_J : boolean (optional)
+            Whether to track the evolution of J during optimization (can consume a lot of memory).
 
         Returns
         -------
@@ -405,6 +407,9 @@ class MOUv2:
         if track_cons_Q0_Q1:
             cons_Q0_Q1_hist = []
 
+        if track_J:
+            J_hist = []
+
         # identity matrix
         id_mat = np.eye(self.n_nodes, dtype=float)
 
@@ -433,9 +438,23 @@ class MOUv2:
                 if verbose:
                     print("Consistency between Q0 and Q1 for current J (Q1 - Q0*exp(J)/Q1):", cons_Q0_Q1_hist[-1])
 
+            # Track evolution of J if enabled
+            if track_J:
+                J_hist.append(np.copy(J_opt))
+                if verbose:
+                    # Plot Jacobian matrix
+                    pp.figure(figsize=(10,5))
+                    pp.imshow(J_opt, cmap='RdYlBu_r') # show only the non-negatives
+                    pp.colorbar()
+                    pp.title(f"Jacobian J for iteration {i_iter}")
+                    pp.xlabel("Region")
+                    pp.ylabel("Region")
+                    pp.tight_layout()
+                    pp.show()
+
             # Calculate Q0 and Qtau for model
             Q0 = spl.solve_continuous_lyapunov(J_opt.T, -Sigma)
-            Qtau = np.dot( Q0, spl.expm( J_opt * i_tau_opt ) )
+            Qtau = np.dot( Q0, spl.expm( J_opt  * i_tau_opt ) )
 
             # difference matrices between model and objectives
             Delta_Q0 = Q0_obj - Q0
@@ -503,6 +522,8 @@ class MOUv2:
                         self.d_fit['eigs_history'] = eigs_history
                 if track_cons_Q0_Q1:
                     self.d_fit['cons_Q0_Q1_history'] = cons_Q0_Q1_hist
+                if track_J:
+                    self.d_fit['J_history'] = J_hist
             else:
                 i_iter += 1
 
