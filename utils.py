@@ -173,17 +173,38 @@ def p_to_stars(p):
         return "*"
     return "ns"
 
-def plot_sc_fc_corr(values, title, file_name, conds, n_sub, palette, presentation_figs_dir, graph_format='pdf'):
-    """ Plot SC-FC correlation for two conditions with a violin plot and statistical comparison using Mann-Whitney U test."""
-    # Build the dataframe with the correct subject-condition pairing
+def plot_sc_fc_corr(values, title, file_name, conds, n_sub, palette, res_dir, graph_format='pdf'):
+    """Plot SC-FC correlation for one or more conditions with pairwise Mann-Whitney tests."""
+    values = np.asarray(values)
+    if values.ndim != 2:
+        raise ValueError("values must be a 2D array with shape (n_sub, n_cond)")
+    if values.shape[1] != len(conds):
+        raise ValueError("values.shape[1] must match the number of conditions in conds")
+
     data = pd.DataFrame({
-        "Condition": [conds[0]] * n_sub + [conds[1]] * n_sub,
-        "SC_FC_correlation": np.concatenate([values[:, 0], values[:, 1]])
+        "Condition": np.repeat(np.asarray(conds, dtype=str), n_sub),
+        "SC_FC_correlation": np.concatenate([values[:, i] for i in range(values.shape[1])])
     }).dropna(subset=["SC_FC_correlation"])
 
-    g1 = data.loc[data["Condition"] == conds[0], "SC_FC_correlation"]
-    g2 = data.loc[data["Condition"] == conds[1], "SC_FC_correlation"]
-    stat, p_value = stats.mannwhitneyu(g1, g2, alternative="two-sided")
+    pairwise_results = []
+    for i in range(len(conds)):
+        for j in range(i + 1, len(conds)):
+            g1 = data.loc[data["Condition"] == str(conds[i]), "SC_FC_correlation"]
+            g2 = data.loc[data["Condition"] == str(conds[j]), "SC_FC_correlation"]
+            stat, p_value = stats.mannwhitneyu(g1, g2, alternative="two-sided")
+            pairwise_results.append({
+                "Condition_1": str(conds[i]),
+                "Condition_2": str(conds[j]),
+                "Mann-Whitney U": stat,
+                "p-value": p_value,
+            })
+
+    pairwise_df = pd.DataFrame(pairwise_results)
+    if len(conds) > 1:
+        groups = [data.loc[data["Condition"] == str(cond), "SC_FC_correlation"].values for cond in conds]
+        H_stat, H_pval = stats.kruskal(*groups)
+    else:
+        H_stat, H_pval = np.nan, np.nan
 
     plt.figure(figsize=(10, 6))
     ax = sb.violinplot(
@@ -212,79 +233,84 @@ def plot_sc_fc_corr(values, title, file_name, conds, n_sub, palette, presentatio
     y_min = data["SC_FC_correlation"].min()
     y_max = data["SC_FC_correlation"].max()
     y_range = max(y_max - y_min, 1e-9)
-    bar_height = y_max + 0.05 * y_range
-    bar_height_diff = 0.02 * y_range
+    bar_base = y_max + 0.05 * y_range
+    bar_step = 0.12 * y_range
+    bar_height = 0.02 * y_range
 
-    x1, x2 = 0, 1
-    ax.plot(
-        [x1, x1, x2, x2],
-        [bar_height, bar_height + bar_height_diff, bar_height + bar_height_diff, bar_height],
-        "k-",
-        linewidth=1.5
-    )
-    ax.text(
-        (x1 + x2) * 0.5,
-        bar_height + bar_height_diff,
-        f"{p_to_stars(p_value)}\np = {p_value:.3g}",
-        ha="center",
-        va="bottom"
-    )
+    for k, row in enumerate(pairwise_results):
+        x1 = list(conds).index(row["Condition_1"])
+        x2 = list(conds).index(row["Condition_2"])
+        y = bar_base + k * bar_step
+        ax.plot(
+            [x1, x1, x2, x2],
+            [y, y + bar_height, y + bar_height, y],
+            "k-",
+            linewidth=1.2
+        )
+        ax.text(
+            (x1 + x2) * 0.5,
+            y + bar_height,
+            f"{p_to_stars(row['p-value'])}\np = {row['p-value']:.3g}",
+            ha="center",
+            va="bottom"
+        )
 
     ax.set_title(title, fontsize=16)
     ax.set_xlabel("Condition")
     ax.set_ylabel("SC-FC correlation")
-    ax.set_ylim(y_min - 0.05 * y_range, bar_height + 0.15 * y_range)
+    if len(pairwise_results) > 0:
+        ax.set_ylim(y_min - 0.05 * y_range, bar_base + len(pairwise_results) * bar_step + 0.15 * y_range)
+    else:
+        ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.1 * y_range)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(presentation_figs_dir, file_name), format=graph_format, dpi=300)
+    plt.savefig(os.path.join(res_dir, file_name), format=graph_format, dpi=300)
     plt.show()
     plt.close()
 
     print(title)
-    print(f"Mann-Whitney U = {stat:.4f}, p = {p_value:.4g}")
+    if len(conds) > 1:
+        print(f"Kruskal-Wallis H = {H_stat:.4f}, p = {H_pval:.4g}")
+        print("Pairwise Mann-Whitney results:")
+        print(pairwise_df)
     print()
 
-def plot_sc_fc_corr_bold_fr(data, order, res_dir, palette, presentation_figs_dir, graph_format='pdf', stat_bars = True):
-    """ Plot SC-FC correlation for both BOLD and firing rate conditions together, with optional statistical comparison bars.
-    Each group is a situation (for ex, BOLD or firing rate) and condition (for ex, baseline or reduced gK)."""
-    # Optional stats containers
+def plot_sc_fc_corr_bold_fr(data, order, res_dir, palette, graph_format='pdf', stat_bars = True):
+    """Plot SC-FC correlation across any number of groups, with optional pairwise statistics."""
     pairwise_df = None
     H_stat, H_pval = None, None
-    
-    if stat_bars:
-        # Pairwise tests
-        pairwise_results = []
-        pairs_to_test = [
-            (0, 1),  # baseline BOLD vs reduced gK BOLD
-            (2, 3),  # baseline FR vs reduced gK FR
-            (0, 2),  # baseline BOLD vs baseline FR
-            (1, 3),  # reduced gK BOLD vs reduced gK FR
-            (0, 3),  # baseline BOLD vs reduced gK FR
-            (1, 2),  # reduced gK BOLD vs baseline FR
-        ]
+    order = list(order)
+    pairwise_results: list[dict[str, object]] = []
+    has_pairwise_results = False
 
-        for i, j in pairs_to_test:
-            g1 = data.loc[data["Group"] == order[i], "SC_FC_correlation"]
-            g2 = data.loc[data["Group"] == order[j], "SC_FC_correlation"]
-            stat, pval = stats.mannwhitneyu(g1, g2, alternative="two-sided")
-            pairwise_results.append({
-                "Group_1": order[i],
-                "Group_2": order[j],
-                "Mann-Whitney U": stat,
-                "p-value": pval,
-            })
+    if stat_bars:
+        for i in range(len(order)):
+            for j in range(i + 1, len(order)):
+                g1 = data.loc[data["Group"] == order[i], "SC_FC_correlation"]
+                g2 = data.loc[data["Group"] == order[j], "SC_FC_correlation"]
+                if len(g1) == 0 or len(g2) == 0:
+                    continue
+                stat, pval = stats.mannwhitneyu(g1, g2, alternative="two-sided")
+                pairwise_results.append({
+                    "Group_1": order[i],
+                    "Group_2": order[j],
+                    "Mann-Whitney U": stat,
+                    "p-value": pval,
+                })
+                has_pairwise_results = True
 
         pairwise_df = pd.DataFrame(pairwise_results)
         pairwise_df.to_csv(os.path.join(res_dir, "SC_FC_pairwise_stats.csv"), index=False)
 
-        # Global test across the 4 groups
         groups = [data.loc[data["Group"] == g, "SC_FC_correlation"].values for g in order]
-        H_stat, H_pval = stats.kruskal(*groups)
-        pd.DataFrame({
-            "Kruskal-Wallis H": [H_stat],
-            "p-value": [H_pval],
-        }).to_csv(os.path.join(res_dir, "SC_FC_global_stats.csv"), index=False)
+        groups = [g for g in groups if len(g) > 0]
+        if len(groups) > 1:
+            H_stat, H_pval = stats.kruskal(*groups)
+            pd.DataFrame({
+                "Kruskal-Wallis H": [H_stat],
+                "p-value": [H_pval],
+            }).to_csv(os.path.join(res_dir, "SC_FC_global_stats.csv"), index=False)
 
 
     plt.figure(figsize=(11, 6))
@@ -311,12 +337,11 @@ def plot_sc_fc_corr_bold_fr(data, order, res_dir, palette, presentation_figs_dir
         ax=ax
     )
 
-    if stat_bars:
-        # Significance bars
+    if stat_bars and has_pairwise_results:
         y_min = data["SC_FC_correlation"].min()
         y_max = data["SC_FC_correlation"].max()
         y_range = max(y_max - y_min, 1e-9)
-        bar_base = y_max + 0.001 * y_range
+        bar_base = y_max + 0.02 * y_range
         bar_step = 0.14 * y_range
         bar_height = 0.01 * y_range
 
@@ -340,7 +365,7 @@ def plot_sc_fc_corr_bold_fr(data, order, res_dir, palette, presentation_figs_dir
                 fontsize=8
             )
 
-            ax.set_ylim(y_min - 0.05 * y_range, bar_base + len(pairwise_results) * bar_step + 0.12 * y_range)
+        ax.set_ylim(y_min - 0.05 * y_range, bar_base + len(pairwise_results) * bar_step + 0.12 * y_range)
 
     ax.set_title("SC-FC correlation by condition and modality - AdEx MF simulations", fontsize=16)
     ax.set_xlabel("Group")
@@ -349,9 +374,9 @@ def plot_sc_fc_corr_bold_fr(data, order, res_dir, palette, presentation_figs_dir
 
     plt.tight_layout()
     if stat_bars:
-        plt.savefig(os.path.join(presentation_figs_dir, f"SC_FC_correlation_all4_sig.{graph_format}"), format=graph_format, dpi=300)
+        plt.savefig(os.path.join(res_dir, f"SC_FC_correlation_all4_sig.{graph_format}"), format=graph_format, dpi=300)
     else:
-        plt.savefig(os.path.join(presentation_figs_dir, f"SC_FC_correlation_all4.{graph_format}"), format=graph_format, dpi=300)
+        plt.savefig(os.path.join(res_dir, f"SC_FC_correlation_all4.{graph_format}"), format=graph_format, dpi=300)
     plt.show()
     plt.close()
 
@@ -583,3 +608,76 @@ def plot_mod_matrix(mod_matrix, mod_matrix_name, res_dir, graph_format):
     plt.title(mod_matrix_name, fontsize=16)
     plt.tight_layout()
     plt.savefig(os.path.join(res_dir,f"{mod_matrix_name}_mod.{graph_format}"), format=graph_format)
+
+def plot_entropy_prod_rate(data, situations, situation_idx, situations_title_dict, res_dir_situation, graph_format, conds, p_value):
+    # Colors 
+    palette = {conds[0]: '#D4C6C9', conds[1]: '#E1544C'}
+
+    # Create the figure
+    plt.figure(figsize=(10, 6))
+
+    # Create violin plot
+    sb.violinplot(data=data, 
+                x='Condition', 
+                y='Entropy_production_rate',
+                palette = palette,
+                alpha=0.44)
+
+    # Add strip plot (individual points)
+    sb.stripplot(data=data,
+                x='Condition',
+                y='Entropy_production_rate',
+                color='gray',
+                alpha=0.5,
+                jitter=0.2,
+                size=4)
+
+    # Add significance bar
+    def add_stat_annotation(p_value):
+        # Define the significance level markers
+        if p_value < 0.001:
+            star_string = '***'
+        elif p_value < 0.01:
+            star_string = '**'
+        elif p_value < 0.05:
+            star_string = '*'
+        else:
+            star_string = 'ns'
+        
+        # Get y coordinates for the bar
+        y_max = data['Entropy_production_rate'].max()
+        bar_height = y_max + 0.0008
+        
+        # Plot the significance bar
+        x1, x2 = 0, 1  # x-coordinates for CTR and SCZ
+        bar_height_diff = 0.0001
+        
+        plt.plot([x1, x1, x2, x2], 
+                [bar_height, bar_height + bar_height_diff, bar_height + bar_height_diff, bar_height],
+                'k-', linewidth=1.5)
+        
+        # Add star annotation
+        plt.text((x1 + x2) * 0.5, bar_height + bar_height_diff,
+                f'{star_string}\np = {p_value:.3f}',
+                ha='center', va='bottom')
+
+    # Add the significance annotation
+    add_stat_annotation(p_value)
+
+    ymax = data['Entropy_production_rate'].max()
+    ymin = data['Entropy_production_rate'].min()
+
+    # Customize the plot
+    plt.title(f'Entropy Production Rate by Condition - {situations_title_dict[situations[situation_idx]]}', fontsize=16)
+    plt.xlabel('Condition')
+    plt.ylabel('Entropy production rate')
+    plt.ylim(ymin-0.002, ymax+0.002)  # Adjust the upper limit if needed to show the significance bar
+    plt.grid(True, alpha=0.3)
+
+    # Adjust layout
+    plt.tight_layout()
+
+    plt.savefig(os.path.join(res_dir_situation,f'entropy_prod_rate_statbar.{graph_format}'), 
+                format=graph_format, dpi=300)
+    plt.show()
+    plt.close()
